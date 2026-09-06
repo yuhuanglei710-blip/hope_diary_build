@@ -191,14 +191,14 @@ def download_everything(url: str, payload: dict, headers: dict[str, str], root: 
                 if isinstance(file, dict) and file.get("mediaUrl"):
                     urls.append(str(file["mediaUrl"]))
     unique_urls = list(dict.fromkeys(urls))
-    total_steps = len(entries) + len(unique_urls) + 1
+    total_steps = len(entries) + len(unique_urls)
     completed, errors, image_map = 0, [], {}
     for index, entry in enumerate(entries, 1):
         diary_id = entry.get("dairyId", index)
         day = clean_text(entry.get("noteDate", ""))[:10] or f"entry_{index}"
         (diary_dir / safe_name(f"{index:03d}_{day}_{diary_id}.json", f"entry_{index}.json")).write_text(json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8")
         completed += 1
-        progress(5 + 60 * completed / total_steps, f"已保存日记 JSON：{index}/{len(entries)}")
+        progress(20 + 48 * completed / total_steps, f"已保存日记 JSON：{index}/{len(entries)}")
     media_headers = {k: v for k, v in headers.items() if k.lower() not in {"content-type", "accept"}}
     for index, media_url in enumerate(unique_urls, 1):
         try:
@@ -209,7 +209,7 @@ def download_everything(url: str, payload: dict, headers: dict[str, str], root: 
         except RuntimeError as error:
             errors.append(f"图片下载失败：{media_url} ({error})")
         completed += 1
-        progress(5 + 60 * completed / total_steps, f"正在下载图片：{index}/{len(unique_urls)}")
+        progress(20 + 48 * completed / total_steps, f"正在下载图片：{index}/{len(unique_urls)}")
     manifest = {"imageMap": {key: str(value.relative_to(root)) for key, value in image_map.items()}, "errors": errors}
     (root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     if errors:
@@ -358,7 +358,12 @@ class DiaryReplica(tk.Tk):
         threading.Thread(target=self.worker, args=(url, root, payload, headers, stamp), daemon=True).start()
 
     def set_progress(self, percent, message):
-        self.after(0, lambda: (self.bar.configure(value=percent), self.status.set(message)))
+        def update():
+            self.bar.configure(value=percent)
+            self.status.set(message)
+            if message.startswith("接口请求成功"):
+                self._write(message + "\n")
+        self.after(0, update)
 
     def worker(self, url, root, payload, headers, stamp):
         try:
