@@ -17,6 +17,22 @@ PowerShell -ExecutionPolicy Bypass -File .\setup.ps1
 3. 安装全部依赖。
 4. 启动日记复刻器。
 
+## 双击生成 EXE
+
+直接双击项目目录中的：
+
+```text
+build-exe.cmd
+```
+
+它会自动检查或安装 Python、创建隔离环境、安装依赖并调用 PyInstaller。完成后窗口不会立即关闭，生成结果位于：
+
+```text
+dist\DiaryReplica.exe
+```
+
+第一次构建需要下载 Python 依赖，因此耗时会比后续构建长。
+
 如果不希望部署完成后自动启动：
 
 ```powershell
@@ -63,6 +79,7 @@ python -m venv .venv
 
 - `diary_query_gui.py`：主程序。
 - `setup.ps1`：一键部署、启动和构建脚本。
+- `build-exe.cmd`：可直接双击的一键 EXE 构建入口。
 - `build_exe.ps1`：仅构建 EXE 的简化脚本。
 - `DiaryReplica.spec`：PyInstaller 配置。
 - `DiaryReplica.iss`：Inno Setup 安装包配置。
