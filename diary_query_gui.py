@@ -99,6 +99,14 @@ def diary_entries(response: dict) -> tuple[dict, list[dict]]:
     return datas, [item for item in as_list(datas.get("list")) if isinstance(item, dict)]
 
 
+def ensure_api_success(response: dict) -> None:
+    """把 HTTP 成功但业务失败的响应转换成用户可读错误。"""
+    status = response.get("status")
+    if status not in (None, 1, "1", True):
+        message = response.get("msg") or response.get("message") or response.get("error") or "未知原因"
+        raise RuntimeError(f"接口拒绝了查询：{clean_text(message)}（status={status}）")
+
+
 def fetch_image(url: str, headers: dict[str, str]) -> bytes:
     """CDN 偶尔中断 TLS：交替使用系统代理和直连，并有限重试。"""
     request_headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://hope.wantexe.com/", **headers}
@@ -123,18 +131,58 @@ def fetch_image(url: str, headers: dict[str, str]) -> bytes:
 
 
 def download_everything(url: str, payload: dict, headers: dict[str, str], root: Path, progress) -> tuple[list[dict], dict[str, Path], list[str]]:
-    """保存原始 JSON、每篇 JSON 和媒体文件。"""
-    progress(4, "正在请求日记接口…")
-    response = api_request(url, payload, headers, progress)
-    datas, entries = diary_entries(response)
+    """自动翻页，保存所有原始 JSON、每篇 JSON 和媒体文件。"""
     root.mkdir(parents=True, exist_ok=True)
-    (root / "response.json").write_text(json.dumps(response, ensure_ascii=False, indent=2), encoding="utf-8")
+    pages_dir = root / "responses"
+    pages_dir.mkdir(exist_ok=True)
+    requested_page = max(1, int(payload["pageNum"]))
+    page_size = max(1, int(payload["pageSize"]))
+    entries: list[dict] = []
+    first_response: dict | None = None
+    total = 0
+    seen_pages: set[str] = set()
+    page = requested_page
+
+    while True:
+        page_payload = {**payload, "pageNum": page, "pageSize": page_size}
+        progress(min(18, 4 + len(seen_pages)), f"正在请求第 {page} 页…")
+        response = api_request(url, page_payload, headers, progress)
+        ensure_api_success(response)
+        if first_response is None:
+            first_response = response
+        (pages_dir / f"response_page_{page:04d}.json").write_text(
+            json.dumps(response, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        datas, page_entries = diary_entries(response)
+        try:
+            total = max(total, int(datas.get("total") or 0))
+        except (TypeError, ValueError):
+            pass
+        progress(min(20, 5 + len(seen_pages)), f"接口请求成功：第 {page} 页返回 {len(page_entries)} 篇，共 {total} 篇")
+
+        # 防止服务端忽略 pageNum、反复返回同一页而形成死循环。
+        signature = json.dumps(page_entries, ensure_ascii=False, sort_keys=True)
+        if signature in seen_pages:
+            break
+        seen_pages.add(signature)
+        entries.extend(page_entries)
+        if not page_entries or len(entries) >= total > 0 or len(page_entries) < page_size:
+            break
+        if page - requested_page >= 9999:
+            raise RuntimeError("自动翻页超过 10000 页，已停止以避免异常循环。")
+        page += 1
+
+    combined_response = dict(first_response or {})
+    combined_datas = dict((first_response or {}).get("datas") or {})
+    combined_datas.update({"list": entries, "total": total})
+    combined_response["datas"] = combined_datas
+    (root / "response.json").write_text(json.dumps(combined_response, ensure_ascii=False, indent=2), encoding="utf-8")
     diary_dir, image_dir = root / "diaries", root / "images"
     diary_dir.mkdir(exist_ok=True)
     image_dir.mkdir(exist_ok=True)
     (root / "query.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     if not entries:
-        return [], {}, [f"接口成功响应，但没有返回日记。total={datas.get('total', 0)}"]
+        return [], {}, ["请求已成功；该用户 ID、日期范围或日记类型下没有日记（total=0）。请确认填写的是用户 ID，而不是日记 ID。"]
 
     urls: list[str] = []
     for entry in entries:
@@ -263,7 +311,7 @@ class DiaryReplica(tk.Tk):
             "pageNum": "1",
         }
         self.vars = {key: tk.StringVar(value=value) for key, value in defaults.items()}
-        fields = [("接口地址", "api"), ("用户 ID", "userId"), ("开始日期", "beginDate"), ("结束日期", "endDate"), ("日记类型", "noteType"), ("查询类型", "type"), ("每页数量", "pageSize"), ("页码", "pageNum")]
+        fields = [("接口地址", "api"), ("用户 ID（不是日记 ID）", "userId"), ("开始日期", "beginDate"), ("结束日期", "endDate"), ("日记类型", "noteType"), ("查询类型", "type"), ("每页数量", "pageSize"), ("起始页码", "pageNum")]
         for n, (label, key) in enumerate(fields):
             row, column = divmod(n, 4)
             ttk.Label(box, text=label).grid(row=row * 2, column=column, sticky="w", padx=4)
@@ -289,7 +337,10 @@ class DiaryReplica(tk.Tk):
     def payload(self) -> dict:
         try:
             for key in ("beginDate", "endDate"): datetime.strptime(self.vars[key].get(), "%Y-%m-%d")
-            return {"beginDate": self.vars["beginDate"].get(), "noteType": int(self.vars["noteType"].get()), "endDate": self.vars["endDate"].get(), "pageSize": int(self.vars["pageSize"].get()), "type": self.vars["type"].get().strip(), "pageNum": int(self.vars["pageNum"].get()), "userId": self.vars["userId"].get().strip()}
+            result = {"beginDate": self.vars["beginDate"].get(), "noteType": int(self.vars["noteType"].get()), "endDate": self.vars["endDate"].get(), "pageSize": int(self.vars["pageSize"].get()), "type": self.vars["type"].get().strip(), "pageNum": int(self.vars["pageNum"].get()), "userId": self.vars["userId"].get().strip()}
+            if result["pageSize"] <= 0 or result["pageNum"] <= 0:
+                raise ValueError("每页数量和起始页码必须大于 0。")
+            return result
         except ValueError as error:
             raise ValueError("日期须为 YYYY-MM-DD；日记类型、每页数量、页码须为整数。") from error
 
@@ -299,18 +350,24 @@ class DiaryReplica(tk.Tk):
             if not all(str(value).strip() for value in payload.values()): raise ValueError("所有查询参数都不能为空。")
         except (ValueError, json.JSONDecodeError) as error:
             messagebox.showerror("参数有误", str(error)); return
-        self.go.configure(state="disabled"); self.bar["value"] = 0; self._write("开始执行…\n")
+        self.go.configure(state="disabled"); self.bar["value"] = 0
+        self._write(f"开始执行：用户 ID {payload['userId']}，{payload['beginDate']} 至 {payload['endDate']}。程序会从第 {payload['pageNum']} 页开始自动获取全部页。\n")
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         root = Path(self.output_dir.get()) / f"query_{payload['userId']}_{stamp}"
-        threading.Thread(target=self.worker, args=(root, payload, headers, stamp), daemon=True).start()
+        url = self.vars["api"].get().strip()
+        threading.Thread(target=self.worker, args=(url, root, payload, headers, stamp), daemon=True).start()
 
     def set_progress(self, percent, message):
         self.after(0, lambda: (self.bar.configure(value=percent), self.status.set(message)))
 
-    def worker(self, root, payload, headers, stamp):
+    def worker(self, url, root, payload, headers, stamp):
         try:
-            entries, image_map, errors = download_everything(self.vars["api"].get().strip(), payload, headers, root, self.set_progress)
-            if not entries: raise RuntimeError(errors[0] if errors else "接口没有返回日记。")
+            entries, image_map, errors = download_everything(url, payload, headers, root, self.set_progress)
+            if not entries:
+                message = errors[0] if errors else "请求成功，但没有查询到日记。"
+                self.set_progress(100, "请求完成：没有查询到日记")
+                self.after(0, lambda: self.empty(message, root))
+                return
             pdf = root / f"日记完整复刻_{stamp}.pdf"
             build_pdf(pdf, entries, image_map, payload, self.set_progress)
             self.set_progress(100, "已完成")
@@ -320,13 +377,20 @@ class DiaryReplica(tk.Tk):
         except Exception as error:
             root.mkdir(parents=True, exist_ok=True)
             (root / "error.txt").write_text(traceback.format_exc(), encoding="utf-8")
-            self.after(0, lambda: self.failed(str(error), root))
+            message = str(error)
+            self.after(0, lambda: self.failed(message, root))
 
     def _write(self, text):
         self.log.configure(state="normal"); self.log.insert("end", text); self.log.see("end"); self.log.configure(state="disabled")
 
     def done(self, report):
         self.go.configure(state="normal"); self._write(report + "\n\n"); messagebox.showinfo("导出完成", report)
+
+    def empty(self, message, root):
+        self.go.configure(state="normal")
+        report = f"{message}\n\n接口响应已保存：\n{root / 'response.json'}"
+        self._write(report + "\n\n")
+        messagebox.showwarning("请求成功，但没有日记", report)
 
     def failed(self, error, root):
         self.go.configure(state="normal"); self.status.set("失败")
