@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build output
+build/
+dist/
+*.log
+
+# Exported diary data (may contain private content)
+diary_output/
+query_*/
+diary_download_*/
+inspect_*/
+verification_export/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
