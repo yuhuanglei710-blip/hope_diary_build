@@ -7,6 +7,10 @@ venv/
 # Build output
 build/
 dist/
+build-*/
+dist-*/
+*.spec
+!DiaryReplica.spec
 *.log
 
 # Exported diary data (may contain private content)

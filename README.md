@@ -12,7 +12,7 @@ PowerShell -ExecutionPolicy Bypass -File .\setup.ps1
 
 脚本会自动完成以下操作：
 
-1. 检查 Python 3.10 或更高版本；未安装时尝试通过 `winget` 安装 Python 3.12。
+1. 检查带完整 Tkinter 的官方 Python 3.12；未安装时尝试通过 `winget` 自动安装。
 2. 在项目目录创建 `.venv` 隔离环境。
 3. 安装全部依赖。
 4. 启动日记复刻器。
@@ -32,6 +32,8 @@ dist\DiaryReplica.exe
 ```
 
 第一次构建需要下载 Python 依赖，因此耗时会比后续构建长。
+
+构建固定使用官方 Python 3.12，并检查 Tkinter/Tcl/Tk 运行库，防止生成缺少图形界面的无效 EXE。旧版脚本生成的 `.venv` 如果不是 Python 3.12，会被自动替换。如果检查失败，请重新安装官方 Python，并确保安装器中的 `tcl/tk and IDLE` 功能已启用。
 
 如果不希望部署完成后自动启动：
 
